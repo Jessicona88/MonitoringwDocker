@@ -1,0 +1,119 @@
+# sauron.collector.yml
+
+# Namnet
+collector_name: sauron_backup_collector
+
+# Vad som mäts
+metrics:
+  - metric_name: sauron_date_since_backup
+    type: gauge
+    help: 'Checks last time a backup was made'
+    key_labels:
+      - DatabaseName
+    values: [LastBackupTime]
+    query: |
+      SELECT 
+          database_name AS DatabaseName, 
+          ISNULL(CONVERT(BIGINT, DATEDIFF(SECOND, '19700101', MAX(backup_finish_date))), 0) AS LastBackupTime
+      FROM msdb.dbo.backupset
+      WHERE type = 'D'
+      GROUP BY database_name
+  
+  - metric_name: sauron_hours_since_backup
+    type: gauge
+    help: 'Checks how many hours it has been since last backup'
+    key_labels:
+      - DatabaseName
+    values: [HoursSinceLastBackup]
+    query: |
+      SELECT
+        msdb.dbo.backupset.database_name AS DatabaseName, 
+        DATEDIFF(HOUR, MAX(msdb.dbo.backupset.backup_finish_date), GETDATE()) AS HoursSinceLastBackup
+      FROM msdb.dbo.backupmediafamily
+      INNER JOIN msdb.dbo.backupset ON msdb.dbo.backupmediafamily.media_set_id = msdb.dbo.backupset.media_set_id
+      WHERE msdb..backupset.type = 'D'
+      GROUP BY msdb.dbo.backupset.database_name
+
+  - metric_name: sauron_resident_memory_bytes
+    type: gauge
+    help: 'SQL Server resident memory size (AKA working set).'
+    values: [resident_memory_bytes]
+    query_ref: sauron_process_memory
+
+  - metric_name: sauron_virtual_memory_bytes
+    type: gauge
+    help: 'SQL Server committed virtual memory size.'
+    values: [virtual_memory_bytes]
+    query_ref: sauron_process_memory
+
+  - metric_name: sauron_batch_requests
+    type: counter
+    help: 'Number of command batches received.'
+    values: [cntr_value]
+    query: |
+      SELECT cntr_value
+      FROM sys.dm_os_performance_counters WITH (NOLOCK)
+      WHERE counter_name = 'Batch Requests/sec'
+
+  - metric_name: sauron_buffer_cache_hit_ratio
+    type: gauge
+    help: 'Ratio of requests that hit the buffer cache'
+    values: [cntr_value]
+    query: |
+      SELECT cntr_value
+      FROM sys.dm_os_performance_counters
+      WHERE [counter_name] = 'Buffer cache hit ratio'
+
+  - metric_name: sauron_memory_utilization_percentage
+    type: gauge
+    help: 'The percentage of committed memory that is in the working set.'
+    values: [memory_utilization_percentage]
+    query_ref: sauron_process_memory
+
+  - metric_name: sauron_checkpoint_pages_sec
+    type: gauge
+    help: 'Checkpoint Pages Per Second'
+    values: [cntr_value]
+    query: |
+      SELECT cntr_value
+      FROM sys.dm_os_performance_counters
+      WHERE [counter_name] = 'Checkpoint pages/sec'
+
+  - metric_name: sauron_os_page_file
+    type: gauge
+    help: 'OS page file, used and available.'
+    value_label: 'state'
+    values: [used, available]
+    query: |
+      SELECT
+        (total_page_file_kb - available_page_file_kb) * 1024 AS used,
+        available_page_file_kb * 1024 AS available
+      FROM sys.dm_os_sys_memory
+
+  - metric_name: sauron_local_time_seconds
+    type: gauge
+    help: 'Local time in seconds since epoch (Unix time).'
+    values: [unix_time]
+    query: |
+      SELECT DATEDIFF(second, '19700101', GETUTCDATE()) AS unix_time
+
+  - metric_name: sauron_connections
+    type: gauge
+    help: 'Number of active connections.'
+    key_labels:
+      - db
+    values: [count]
+    query: |
+      SELECT DB_NAME(sp.dbid) AS db, COUNT(sp.spid) AS count
+      FROM sys.sysprocesses sp
+      GROUP BY DB_NAME(sp.dbid)
+
+queries:
+  - query_name: sauron_process_memory
+    query: |
+      SELECT
+        physical_memory_in_use_kb * 1024 AS resident_memory_bytes,
+        virtual_address_space_committed_kb * 1024 AS virtual_memory_bytes,
+        memory_utilization_percentage,
+        page_fault_count
+      FROM sys.dm_os_process_memory
